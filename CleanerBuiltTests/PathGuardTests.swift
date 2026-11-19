@@ -170,7 +170,7 @@ struct PathGuardTests {
     }
 
     @Test func noRuleRootIsDenied() {
-        for rule in CleanupRules.rules where !rule.isReviewOnly {
+        for rule in CleanupRules.rules where rule.movesToTrash {
             #expect(!PathGuard.live.isDenied(rule.rootPath), "\(rule.id)")
         }
     }

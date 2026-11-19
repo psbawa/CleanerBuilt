@@ -205,3 +205,69 @@ struct CleanerTests {
         #expect(env.log.read().count == 3)
     }
 }
+
+struct Phase5Tests {
+    @Test func includeNamesLimitsScanToNamedChild() async throws {
+        let sb = try Sandbox(); defer { sb.remove() }
+        let root = try sb.dir("root")
+        for n in ["_cacache", "_logs", "other"] {
+            try sb.file("root/\(n)/x")
+            try sb.setAge(sb.url("root/\(n)"), days: 30)
+        }
+        let rule = Rule(id: "npm", category: .devCaches, title: "t", root: root.path, includeNames: ["_cacache"], explanation: "")
+        let scanner = Scanner(rules: [rule], pathGuard: PathGuard(deny: [], roots: [root.path]), trashPath: nil)
+        let r = try await scanner.scan(ScanOptions(enabledRuleIDs: ["npm"], ageDays: 7, runningApps: [], openPaths: [])) { _, _ in }
+        #expect(r.items.map(\.name) == ["_cacache"])
+        #expect(r.skipped.isEmpty) // non-included siblings are not even listed
+    }
+
+    @Test func cleanerRefusesSiblingOfIncludedFolder() async throws {
+        let sb = try Sandbox(); defer { sb.remove() }
+        let root = try sb.dir("root")
+        try sb.file("root/other/x")
+        try sb.setAge(sb.url("root/other"), days: 30)
+        let rule = Rule(id: "npm", category: .devCaches, title: "t", root: root.path, includeNames: ["_cacache"], explanation: "")
+        let cleaner = Cleaner(scanner: Scanner(rules: [rule], pathGuard: PathGuard(deny: [], roots: [root.path]), trashPath: nil),
+                              rules: [rule], log: ActionLog(fileURL: sb.url("log.jsonl")), trashPath: sb.url("Trash").path,
+                              trash: { _ in Issue.record("must not trash"); return nil })
+        let item = ScanItem(url: sb.url("root/other"), ruleID: "npm", category: .devCaches, bytes: 1, lastUsed: .distantPast)
+        let entries = await cleaner.moveToTrash([item], options: ScanOptions(enabledRuleIDs: [], ageDays: 7, runningApps: [], openPaths: [])) { _ in }
+        #expect(entries.first?.detail == "Excluded by rule")
+    }
+
+    @Test func toolItemWithUnexpectedPathIsNeverRun() async throws {
+        let sb = try Sandbox(); defer { sb.remove() }
+        let brew = try #require(CleanupRules.rule("brew"))
+        let fake = try sb.file("evil/brew")
+        let cleaner = Cleaner(rules: [brew], log: ActionLog(fileURL: sb.url("log.jsonl")), trashPath: sb.url("Trash").path,
+                              trash: { _ in Issue.record("must not trash"); return nil })
+        let item = ScanItem(url: fake, ruleID: "brew", category: .devCaches, bytes: 1, lastUsed: .distantPast)
+        let entries = await cleaner.moveToTrash([item], options: ScanOptions(enabledRuleIDs: [], ageDays: 7, runningApps: [], openPaths: [])) { _ in }
+        #expect(entries.map(\.outcome) == [.skipped])
+    }
+
+    @Test func parsesBrewEstimate() {
+        #expect(ToolRunner.parseBrewSize("==> This operation would free approximately 1.5GB of disk space.") == Int64(1.5 * 1_073_741_824))
+        #expect(ToolRunner.parseBrewSize("would free approximately 312.4KB of disk space") == Int64(312.4 * 1024))
+        #expect(ToolRunner.parseBrewSize("Nothing to clean") == nil)
+    }
+
+    @Test func toolsArePermanentSoTheyAreOptIn() {
+        for rule in CleanupRules.rules {
+            guard case .tool = rule.unit else { continue }
+            #expect(!rule.defaultOn, "\(rule.id)")
+        }
+    }
+
+    @Test func browserRulesStayInsideCachesFolder() {
+        let caches = CleanupRules.expand("~/Library/Caches")
+        for rule in CleanupRules.rules where rule.category == .browserCaches {
+            #expect(rule.rootPath == caches || rule.rootPath.hasPrefix(caches + "/"), "\(rule.id)")
+        }
+    }
+
+    @Test func toolRulesAddNoAllowedRoots() {
+        #expect(!PathGuard.live.roots.contains(""))
+        #expect(Set(PathGuard.live.roots) == Set(CleanupRules.rules.filter(\.movesToTrash).compactMap { PathGuard.realPath($0.rootPath)?.lowercased() }))
+    }
+}

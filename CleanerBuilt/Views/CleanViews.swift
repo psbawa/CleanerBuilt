@@ -6,13 +6,22 @@ struct ConfirmCleanSheet: View {
 
     var body: some View {
         let items = model.selectedItems.sorted { $0.bytes > $1.bytes }
+        let permanent = items.filter { !(CleanupRules.rule($0.ruleID)?.movesToTrash ?? true) }
         VStack(alignment: .leading, spacing: 14) {
             Label("Move \(items.count) items to the Trash?", systemImage: "trash")
                 .font(.title2.bold())
             Text("Total: **\(model.selectedBytes.byteString)**. Nothing is deleted: you can restore any item from the Trash with **Put Back** in Finder. Each item is checked again right before it moves, and anything that changed or is now in use is skipped.")
                 .fixedSize(horizontal: false, vertical: true)
+            if !permanent.isEmpty {
+                Label("Can't be undone: \(permanent.map(model.displayName).joined(separator: ", ")) \(permanent.count == 1 ? "is" : "are") cleaned by the tool itself and won't go to the Trash.", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             List(items) { item in
                 HStack {
+                    if permanent.contains(item) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
                     Text(model.displayName(item))
                     Spacer()
                     Text(item.bytes.byteString).monospacedDigit().foregroundStyle(.secondary)

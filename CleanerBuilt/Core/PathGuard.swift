@@ -9,7 +9,7 @@ nonisolated struct PathGuard: Sendable {
 
     static let live = PathGuard(
         deny: CleanupRules.deny.map(CleanupRules.expand),
-        roots: CleanupRules.rules.filter { !$0.isReviewOnly }.map(\.rootPath)
+        roots: CleanupRules.rules.filter(\.movesToTrash).map(\.rootPath)
     )
 
     init(deny: [String], roots: [String]) {

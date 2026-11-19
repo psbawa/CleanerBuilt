@@ -3,7 +3,7 @@ import Foundation
 // The ONLY place cleanup paths are defined. Ask before adding a new root.
 
 nonisolated enum CleanupCategory: String, CaseIterable, Identifiable, Sendable {
-    case userCaches, userLogs, temp, xcode, largeFiles
+    case userCaches, userLogs, temp, xcode, devCaches, browserCaches, largeFiles
 
     var id: Self { self }
 
@@ -13,6 +13,8 @@ nonisolated enum CleanupCategory: String, CaseIterable, Identifiable, Sendable {
         case .userLogs: "App Logs"
         case .temp: "Temporary Files"
         case .xcode: "Xcode"
+        case .devCaches: "Developer Caches"
+        case .browserCaches: "Browser Caches"
         case .largeFiles: "Large & Old Files"
         }
     }
@@ -23,6 +25,8 @@ nonisolated enum CleanupCategory: String, CaseIterable, Identifiable, Sendable {
         case .userLogs: "doc.text"
         case .temp: "clock.badge.xmark"
         case .xcode: "hammer"
+        case .devCaches: "shippingbox"
+        case .browserCaches: "safari"
         case .largeFiles: "doc.badge.ellipsis"
         }
     }
@@ -33,6 +37,8 @@ nonisolated enum CleanupCategory: String, CaseIterable, Identifiable, Sendable {
         case .userLogs: "Diagnostic text logs written by apps. Only useful when troubleshooting a problem. Safe to remove."
         case .temp: "Scratch files apps left in your private temporary folder. Only items untouched for the age threshold and not open in any app."
         case .xcode: "Build products and support files from Xcode. Xcode recreates what it needs. Skipped entirely while Xcode is running."
+        case .devCaches: "Download caches kept by developer tools. The tools download again whatever they need. Only shown for tools you have installed."
+        case .browserCaches: "Cached web content only. Never cookies, history, passwords or profiles. Skipped while that browser is running."
         case .largeFiles: "Big files in Downloads you haven't opened in 90+ days. Review only: Cleaner Built never selects or removes these."
         }
     }
@@ -43,6 +49,13 @@ nonisolated enum Unit: Sendable, Equatable {
     case eachChild
     /// Listed for the user to review in Finder; never selectable for cleaning.
     case reviewOnly(minBytes: Int64, unusedDays: Int)
+    /// Runs the tool's own cleanup command instead of touching its folders. PERMANENT: not via the Trash.
+    case tool(ToolKind)
+}
+
+nonisolated enum ToolKind: Sendable, Equatable {
+    case brewCleanup             // brew cleanup
+    case simctlDeleteUnavailable // xcrun simctl delete unavailable
 }
 
 nonisolated struct Rule: Identifiable, Sendable {
@@ -59,12 +72,15 @@ nonisolated struct Rule: Identifiable, Sendable {
     var keepNewest: Int? = nil
     /// fnmatch patterns on child names that are never included.
     var excludeNames: [String] = []
+    /// If set, only children with these exact names are considered (for single-folder targets like ~/.npm/_cacache).
+    var includeNames: [String]? = nil
     /// If any of these apps is running, the whole rule is skipped.
     var ownerBundleIDs: [String] = []
     let explanation: String
 
     var rootPath: String { CleanupRules.expand(root) }
-    var isReviewOnly: Bool { if case .reviewOnly = unit { true } else { false } }
+    /// Only these rules' items are ever moved to the Trash.
+    var movesToTrash: Bool { unit == .eachChild }
 }
 
 nonisolated enum CleanupRules {
@@ -91,6 +107,34 @@ nonisolated enum CleanupRules {
         Rule(id: "xcodeDeviceSupport", category: .xcode, title: "iOS DeviceSupport", root: "~/Library/Developer/Xcode/iOS DeviceSupport",
              ageFiltered: false, keepNewest: 2, ownerBundleIDs: ["com.apple.dt.Xcode"],
              explanation: "Debug symbols copied from each iOS version you've connected. The newest 2 versions are always kept; older ones are copied again if needed."),
+        Rule(id: "simctl", category: .xcode, title: "Unavailable simulators", root: "",
+             unit: .tool(.simctlDeleteUnavailable), ageFiltered: false, defaultOn: false,
+             explanation: "Runs `xcrun simctl delete unavailable`: removes simulators for iOS versions no longer installed. Permanent: they don't go to the Trash."),
+
+        Rule(id: "brew", category: .devCaches, title: "Homebrew (brew cleanup)", root: "",
+             unit: .tool(.brewCleanup), ageFiltered: false, defaultOn: false,
+             explanation: "Runs `brew cleanup`, so Homebrew removes its old downloads and outdated versions itself. Permanent: they don't go to the Trash, but Homebrew can download them again."),
+        Rule(id: "npm", category: .devCaches, title: "npm cache", root: "~/.npm", includeNames: ["_cacache"],
+             explanation: "npm's package download cache. npm re-downloads packages when needed."),
+        Rule(id: "yarn", category: .devCaches, title: "Yarn cache", root: "~/Library/Caches", includeNames: ["Yarn"],
+             explanation: "Yarn's package download cache."),
+        Rule(id: "pip", category: .devCaches, title: "pip cache", root: "~/Library/Caches", includeNames: ["pip"],
+             explanation: "pip's Python package download cache."),
+        Rule(id: "cocoapods", category: .devCaches, title: "CocoaPods cache", root: "~/Library/Caches", includeNames: ["CocoaPods"],
+             explanation: "Downloaded pod sources and specs. Your projects' Pods folders are not touched."),
+        Rule(id: "gradle", category: .devCaches, title: "Gradle caches", root: "~/.gradle", includeNames: ["caches"],
+             explanation: "Gradle's dependency and build cache. Skipped while any file in it is open (e.g. a running Gradle daemon)."),
+
+        Rule(id: "safari", category: .browserCaches, title: "Safari", root: "~/Library/Caches", includeNames: ["com.apple.Safari"],
+             ownerBundleIDs: ["com.apple.Safari"],
+             explanation: "Safari's cache folder in ~/Library/Caches."),
+        Rule(id: "chrome", category: .browserCaches, title: "Chrome", root: "~/Library/Caches/Google/Chrome",
+             ownerBundleIDs: ["com.google.Chrome"],
+             explanation: "One item per Chrome profile; only its cache folder in ~/Library/Caches. Your profile data lives elsewhere and is never touched."),
+        Rule(id: "firefox", category: .browserCaches, title: "Firefox", root: "~/Library/Caches/Firefox/Profiles",
+             ownerBundleIDs: ["org.mozilla.firefox"],
+             explanation: "One item per Firefox profile; only its cache folder in ~/Library/Caches. Your profile data lives elsewhere and is never touched."),
+
         Rule(id: "largeDownloads", category: .largeFiles, title: "Large, unused downloads", root: "~/Downloads",
              unit: .reviewOnly(minBytes: 500_000_000, unusedDays: 90), ageFiltered: false,
              explanation: "Files over 500 MB not opened in 90+ days. Shown for review only."),
@@ -106,6 +150,8 @@ nonisolated enum CleanupRules {
     ]
 
     static let trash = "~/.Trash"
+
+    static func rule(_ id: String) -> Rule? { rules.first { $0.id == id } }
 
     static func expand(_ path: String) -> String {
         if path == "$TMPDIR" { return NSTemporaryDirectory() }

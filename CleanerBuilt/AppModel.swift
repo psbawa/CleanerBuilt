@@ -114,7 +114,8 @@ final class AppModel {
     }
 
     func displayName(_ item: ScanItem) -> String {
-        appNames[item.name] ?? item.name
+        if let rule = CleanupRules.rule(item.ruleID), !rule.movesToTrash { return rule.title }
+        return appNames[item.name] ?? item.name
     }
 
     private func finish(_ result: ScanResult) {

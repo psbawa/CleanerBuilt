@@ -68,6 +68,8 @@ nonisolated struct Scanner {
                 try scanChildren(rule, options, open: open, into: &result, counter: &counter)
             case let .reviewOnly(minBytes, unusedDays):
                 try scanLargeFiles(rule, minBytes: minBytes, unusedSince: options.now.addingTimeInterval(-Double(unusedDays) * 86_400), into: &result, counter: &counter)
+            case .tool(let kind):
+                try scanTool(rule, kind, now: options.now, into: &result, counter: &counter)
             }
         }
         if let trashPath {
@@ -107,7 +109,25 @@ nonisolated struct Scanner {
     }
 
     static func isExcluded(_ name: String, by rule: Rule) -> Bool {
-        rule.excludeNames.contains { fnmatch($0, name, 0) == 0 }
+        if let include = rule.includeNames, !include.contains(name) { return true }
+        return rule.excludeNames.contains { fnmatch($0, name, 0) == 0 }
+    }
+
+    /// One item per installed tool that has something to clean; size is the tool's own estimate.
+    private func scanTool(_ rule: Rule, _ kind: ToolKind, now: Date, into result: inout ScanResult, counter: inout Counter) throws {
+        guard let exe = ToolRunner.executable(kind) else { return } // not installed
+        let bytes: Int64
+        switch kind {
+        case .brewCleanup:
+            guard let estimate = ToolRunner.brewEstimate(exe) else { return }
+            bytes = estimate
+        case .simctlDeleteUnavailable:
+            let paths = ToolRunner.unavailableSimulatorPaths()
+            guard !paths.isEmpty else { return }
+            var ignored: [String] = []
+            bytes = try paths.reduce(0) { $0 + (try measure(URL(fileURLWithPath: $1), open: [], counter: &counter, errors: &ignored).bytes) }
+        }
+        result.items.append(ScanItem(url: URL(fileURLWithPath: exe), ruleID: rule.id, category: rule.category, bytes: bytes, lastUsed: now))
     }
 
     enum Verdict {
@@ -205,26 +225,5 @@ nonisolated struct Scanner {
             count += 1
             if count % 2000 == 0 { report(count, path) }
         }
-    }
-}
-
-nonisolated enum OpenFiles {
-    /// Paths currently open by the user's own processes (no sudo). nil if lsof failed.
-    static func snapshot() -> Set<String>? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        p.arguments = ["-nP", "-w", "-Fn", "-u", String(getuid())]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        guard !data.isEmpty else { return nil }
-        var paths = Set<String>()
-        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") where line.hasPrefix("n/") {
-            paths.insert(String(line.dropFirst()))
-        }
-        return paths
     }
 }

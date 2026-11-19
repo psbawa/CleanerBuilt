@@ -42,9 +42,13 @@ nonisolated struct Cleaner {
             LogEntry(action: Self.moveAction, path: item.url.path, bytes: bytes ?? item.bytes, outcome: outcome, detail: detail)
         }
         // Final safety check: re-validate everything, don't trust the scan.
-        guard let rule = rules.first(where: { $0.id == item.ruleID }), !rule.isReviewOnly, rule.category == item.category else {
+        guard let rule = rules.first(where: { $0.id == item.ruleID }), rule.category == item.category else {
             return entry(.skipped, "No matching cleanup rule")
         }
+        if case .tool(let kind) = rule.unit {
+            return runTool(kind, item: item, entry: entry)
+        }
+        guard rule.movesToTrash else { return entry(.skipped, "Review-only items are never removed") }
         guard let real = scanner.pathGuard.validate(item.url) else {
             return entry(.skipped, "Failed final safety check (symlink, protected, missing, or outside allowed folders)")
         }
@@ -76,6 +80,20 @@ nonisolated struct Cleaner {
         } catch {
             return entry(.failed, error.localizedDescription)
         }
+    }
+
+    /// PERMANENT, done by the tool itself. Only the exact installed executable found now is run, never a path from the scan.
+    private func runTool(_ kind: ToolKind, item: ScanItem, entry: (LogEntry.Outcome, String, Int64?) -> LogEntry) -> LogEntry {
+        guard let exe = ToolRunner.executable(kind), exe == item.url.path else {
+            return entry(.skipped, "Tool not found where the scan saw it", nil)
+        }
+        let args = ToolRunner.cleanupArguments(kind)
+        let command = ([(exe as NSString).lastPathComponent] + args).joined(separator: " ")
+        guard let out = ToolRunner.run(exe, args) else { return entry(.failed, "Couldn't start `\(command)`", nil) }
+        guard out.status == 0 else {
+            return entry(.failed, "`\(command)` exited with \(out.status): \(out.text.suffix(300))", nil)
+        }
+        return entry(.deleted, "Ran `\(command)` (removed permanently by the tool)", nil)
     }
 
     /// PERMANENT. Erases everything in the user's Home Trash (~/.Trash).
