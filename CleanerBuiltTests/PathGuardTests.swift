@@ -180,3 +180,21 @@ struct PathGuardTests {
         #expect(!PathGuard.live.roots.contains(downloads.lowercased()))
     }
 }
+
+struct PermissionsTests {
+    @Test func readableProbeMeansAccess() throws {
+        let box = try Sandbox()
+        defer { box.remove() }
+        let file = try box.file("db")
+        #expect(Permissions.hasFullDiskAccess(probes: [box.base.path + "/missing", file.path]))
+    }
+
+    @Test func missingOrUnreadableProbesMeanNoAccess() throws {
+        let box = try Sandbox()
+        defer { box.remove() }
+        let file = try box.file("db")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path) }
+        #expect(!Permissions.hasFullDiskAccess(probes: [box.base.path + "/missing", file.path]))
+    }
+}
