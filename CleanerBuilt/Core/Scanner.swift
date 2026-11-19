@@ -61,13 +61,11 @@ nonisolated struct Scanner {
             open = []
             result.errors.append("Couldn't list open files (lsof failed), so files in use may not be detected.")
         }
-        let cutoff = options.now.addingTimeInterval(-Double(options.ageDays) * 86_400)
-
         for rule in rules where options.enabledRuleIDs.contains(rule.id) {
             try Task.checkCancellation()
             switch rule.unit {
             case .eachChild:
-                try scanChildren(rule, options, open: open, cutoff: cutoff, into: &result, counter: &counter)
+                try scanChildren(rule, options, open: open, into: &result, counter: &counter)
             case let .reviewOnly(minBytes, unusedDays):
                 try scanLargeFiles(rule, minBytes: minBytes, unusedSince: options.now.addingTimeInterval(-Double(unusedDays) * 86_400), into: &result, counter: &counter)
             }
@@ -79,50 +77,60 @@ nonisolated struct Scanner {
         return result
     }
 
-    private func scanChildren(_ rule: Rule, _ options: ScanOptions, open: Set<String>, cutoff: Date,
+    private func scanChildren(_ rule: Rule, _ options: ScanOptions, open: Set<String>,
                               into result: inout ScanResult, counter: inout Counter) throws {
-        guard let root = PathGuard.realPath(rule.rootPath) else { return } // folder doesn't exist
         let children: [URL]
         do {
-            children = try FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: root, isDirectory: true), includingPropertiesForKeys: nil)
+            children = try candidates(rule)
         } catch {
-            result.errors.append("\(root): \(error.localizedDescription)")
+            result.errors.append("\(rule.rootPath): \(error.localizedDescription)")
             return
         }
-        let sorted = children
-            .filter { child in !rule.excludeNames.contains { fnmatch($0, child.lastPathComponent, 0) == 0 } }
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedDescending }
-        let runningOwner = rule.ownerBundleIDs.first { options.runningApps.contains($0.lowercased()) }
-
-        for (index, child) in sorted.enumerated() {
+        let kept = Set(children.prefix(rule.keepNewest ?? 0).map(\.lastPathComponent))
+        for child in children {
             try Task.checkCancellation()
-            var reason: String?
-            if let keep = rule.keepNewest, index < keep {
-                reason = "Newest \(keep) versions are kept"
-            } else if let runningOwner {
-                reason = "\(runningOwner) is running"
-            } else if pathGuard.validate(child) == nil {
-                reason = "Symlink, protected, or outside allowed folders"
-            } else if Self.isRunning(child.lastPathComponent, in: options.runningApps) {
-                reason = "App is running"
-            } else {
-                let m = try measure(child, open: open, counter: &counter, errors: &result.errors)
-                if m.unreadable {
-                    reason = "Couldn't read everything inside"
-                } else if m.dataless {
-                    reason = "Contains iCloud placeholders"
-                } else if m.inUse {
-                    reason = "Open in another app"
-                } else if rule.ageFiltered, m.newest > cutoff {
-                    reason = "Used in the last \(options.ageDays) days"
-                } else {
-                    result.items.append(ScanItem(url: child, ruleID: rule.id, category: rule.category, bytes: m.bytes, lastUsed: m.newest))
-                }
-            }
-            if let reason {
+            switch try check(child, rule: rule, kept: kept, options: options, open: open, counter: &counter, errors: &result.errors) {
+            case .ok(let m):
+                result.items.append(ScanItem(url: child, ruleID: rule.id, category: rule.category, bytes: m.bytes, lastUsed: m.newest))
+            case .skip(let reason):
                 result.skipped.append(SkippedItem(path: child.path, category: rule.category, reason: reason))
             }
         }
+    }
+
+    /// Non-excluded children of a rule's root (real path), highest version name first. Empty if the root doesn't exist.
+    func candidates(_ rule: Rule) throws -> [URL] {
+        guard let root = PathGuard.realPath(rule.rootPath) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: root, isDirectory: true), includingPropertiesForKeys: nil)
+            .filter { !Self.isExcluded($0.lastPathComponent, by: rule) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedDescending }
+    }
+
+    static func isExcluded(_ name: String, by rule: Rule) -> Bool {
+        rule.excludeNames.contains { fnmatch($0, name, 0) == 0 }
+    }
+
+    enum Verdict {
+        case ok(Measure)
+        case skip(String)
+    }
+
+    /// Every per-item safety check. Runs at scan time AND again in Cleaner right before trashing.
+    func check(_ child: URL, rule: Rule, kept: Set<String>, options: ScanOptions, open: Set<String>,
+               counter: inout Counter, errors: inout [String]) throws -> Verdict {
+        let name = child.lastPathComponent
+        if Self.isExcluded(name, by: rule) { return .skip("Excluded by rule") }
+        if kept.contains(name), let keep = rule.keepNewest { return .skip("Newest \(keep) versions are kept") }
+        if let owner = rule.ownerBundleIDs.first(where: { options.runningApps.contains($0.lowercased()) }) { return .skip("\(owner) is running") }
+        if pathGuard.validate(child) == nil { return .skip("Symlink, protected, or outside allowed folders") }
+        if Self.isRunning(name, in: options.runningApps) { return .skip("App is running") }
+        let m = try measure(child, open: open, counter: &counter, errors: &errors)
+        if m.unreadable { return .skip("Couldn't read everything inside") }
+        if m.dataless { return .skip("Contains iCloud placeholders") }
+        if m.inUse { return .skip("Open in another app") }
+        let cutoff = options.now.addingTimeInterval(-Double(options.ageDays) * 86_400)
+        if rule.ageFiltered, m.newest > cutoff { return .skip("Used in the last \(options.ageDays) days") }
+        return .ok(m)
     }
 
     // ponytail: name-based match (folder == bundle ID / app name, or bundle ID + "."); folders named otherwise

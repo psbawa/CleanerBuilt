@@ -21,6 +21,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
+    @Environment(AppModel.self) private var model
     @State private var selection: SidebarItem? = .overview
 
     var body: some View {
@@ -34,12 +35,11 @@ struct ContentView: View {
             case .overview: OverviewView(showResults: { selection = .results })
             case .results: ResultsView()
             case .largeFiles: LargeFilesView()
-            case .history:
-                ContentUnavailableView("History", systemImage: "clock.arrow.circlepath", description: Text("Cleaning history arrives with the cleaning phase."))
-                    .navigationTitle("History")
+            case .history: HistoryView()
             case .settings: SettingsView()
             }
         }
+        .sheet(item: Bindable(model).report) { CleanReportSheet(report: $0) }
     }
 }
 

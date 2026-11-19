@@ -26,7 +26,7 @@ final class AppModel {
     var reclaimableBytes: Int64 { result?.items.reduce(0) { $0 + $1.bytes } ?? 0 }
 
     func startScan() {
-        guard !isScanning else { return }
+        guard !isBusy else { return }
         isScanning = true
         scannedFiles = 0
         currentPath = ""
@@ -50,6 +50,69 @@ final class AppModel {
         scanTask?.cancel()
     }
 
+    // MARK: Cleaning
+
+    private(set) var isCleaning = false
+    private(set) var cleanedCount = 0
+    private(set) var cleanTotal = 0
+    var report: CleanReport?
+    private(set) var history: [LogEntry] = []
+    private var cleanTask: Task<Void, Never>?
+
+    var isBusy: Bool { isScanning || isCleaning }
+
+    /// Moves the selected items to the Trash. Each one is re-checked right before it moves.
+    func clean() {
+        let items = selectedItems
+        guard !isBusy, !items.isEmpty else { return }
+        isCleaning = true
+        cleanedCount = 0
+        cleanTotal = items.count
+        let options = ScanOptions(enabledRuleIDs: [], ageDays: Prefs.ageDays, runningApps: Self.runningApps())
+        cleanTask = Task { [weak self] in
+            let entries = await Cleaner().moveToTrash(items, options: options) { done in
+                Task { @MainActor in self?.cleanedCount = done }
+            }
+            guard let self else { return }
+            let moved = entries.filter { $0.outcome == .trashed }
+            let movedPaths = Set(moved.map(\.path))
+            result?.items.removeAll { movedPaths.contains($0.id) }
+            result?.trashBytes += moved.reduce(0) { $0 + $1.bytes }
+            selection.subtract(movedPaths)
+            report = CleanReport(title: "Moved to Trash", entries: entries, stoppedEarly: entries.count < items.count)
+            finishCleaning()
+        }
+    }
+
+    func cancelClean() {
+        cleanTask?.cancel()
+    }
+
+    /// PERMANENT. The UI must confirm first.
+    func emptyTrash() {
+        guard !isBusy else { return }
+        isCleaning = true
+        cleanedCount = 0
+        cleanTotal = 0
+        cleanTask = Task { [weak self] in
+            let entries = await Cleaner().emptyTrash()
+            guard let self else { return }
+            result?.trashBytes = entries.filter { $0.outcome != .deleted }.reduce(0) { $0 + $1.bytes }
+            report = CleanReport(title: "Trash Emptied", entries: entries, stoppedEarly: false)
+            finishCleaning()
+        }
+    }
+
+    func loadHistory() {
+        history = ActionLog.live.read()
+    }
+
+    private func finishCleaning() {
+        isCleaning = false
+        cleanTask = nil
+        loadHistory()
+    }
+
     func displayName(_ item: ScanItem) -> String {
         appNames[item.name] ?? item.name
     }
@@ -67,6 +130,17 @@ final class AppModel {
     private static func runningApps() -> Set<String> {
         Set(NSWorkspace.shared.runningApplications.flatMap { [$0.bundleIdentifier, $0.localizedName] }.compactMap { $0?.lowercased() })
     }
+}
+
+struct CleanReport: Identifiable {
+    let id = UUID()
+    let title: String
+    let entries: [LogEntry]
+    let stoppedEarly: Bool
+
+    var done: [LogEntry] { entries.filter { $0.outcome == .trashed || $0.outcome == .deleted } }
+    var problems: [LogEntry] { entries.filter { $0.outcome == .skipped || $0.outcome == .failed } }
+    var doneBytes: Int64 { done.reduce(0) { $0 + $1.bytes } }
 }
 
 enum Prefs {

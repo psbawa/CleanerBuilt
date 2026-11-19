@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ResultsView: View {
     @Environment(AppModel.self) private var model
+    @State private var showConfirm = false
 
     var body: some View {
         Group {
@@ -66,13 +67,23 @@ struct ResultsView: View {
         }
         .safeAreaInset(edge: .bottom) {
             HStack {
-                Text("\(model.selection.count) of \(result.items.count) items selected")
-                Spacer()
-                Text("Preview only. Nothing has been removed.").foregroundStyle(.secondary)
-                Text(model.selectedBytes.byteString).font(.title3.bold()).monospacedDigit()
+                if model.isCleaning {
+                    CleanProgressView()
+                    Spacer()
+                } else {
+                    Text("\(model.selection.count) of \(result.items.count) items selected")
+                    Spacer()
+                    Text(model.selectedBytes.byteString).font(.title3.bold()).monospacedDigit()
+                    Button("Move to Trash…", systemImage: "trash") { showConfirm = true }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.selection.isEmpty || model.isBusy)
+                }
             }
             .padding()
             .background(.bar)
+        }
+        .sheet(isPresented: $showConfirm) {
+            ConfirmCleanSheet()
         }
     }
 

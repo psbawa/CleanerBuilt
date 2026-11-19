@@ -3,6 +3,7 @@ import SwiftUI
 struct OverviewView: View {
     @Environment(AppModel.self) private var model
     @State private var disk = DiskUsage.current()
+    @State private var confirmEmptyTrash = false
     let showResults: () -> Void
 
     var body: some View {
@@ -19,6 +20,8 @@ struct OverviewView: View {
                     Spacer()
                     if model.isScanning {
                         ScanProgressView()
+                    } else if model.isCleaning {
+                        CleanProgressView()
                     } else {
                         Button { model.startScan() } label: {
                             Label("Scan", systemImage: "magnifyingglass")
@@ -39,7 +42,13 @@ struct OverviewView: View {
                             LabeledContent("Items found", value: result.items.count.formatted())
                             LabeledContent("Skipped for safety", value: result.skipped.count.formatted())
                             LabeledContent("Large files to review", value: result.largeFiles.count.formatted())
-                            LabeledContent("Trash", value: result.trashBytes.byteString)
+                            LabeledContent("Trash") {
+                                HStack {
+                                    Text(result.trashBytes.byteString)
+                                    Button("Empty Trash…", role: .destructive) { confirmEmptyTrash = true }
+                                        .disabled(model.isBusy || result.trashBytes == 0)
+                                }
+                            }
                             Button("View Results", action: showResults)
                                 .padding(.top, 4)
                         }
@@ -52,7 +61,12 @@ struct OverviewView: View {
             .padding(24)
         }
         .navigationTitle("Overview")
-        .onChange(of: model.isScanning) { disk = .current() }
+        .onChange(of: model.isBusy) { disk = .current() }
+        .confirmationDialog("Permanently erase everything in the Trash?", isPresented: $confirmEmptyTrash) {
+            Button("Erase \(model.result?.trashBytes.byteString ?? "") Permanently", role: .destructive) { model.emptyTrash() }
+        } message: {
+            Text("This is the only action in Cleaner Built that can't be undone. Items in your Home Trash will be erased and can't be put back.")
+        }
     }
 }
 
