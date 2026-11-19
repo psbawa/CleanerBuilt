@@ -20,5 +20,12 @@ struct CleanerBuiltApp: App {
                 model.refreshPermissions()
             }
         }
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Scan") { model.startScan() }
+                    .keyboardShortcut("r")
+                    .disabled(model.isBusy || !model.hasFullDiskAccess)
+            }
+        }
     }
 }

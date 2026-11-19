@@ -10,7 +10,7 @@ struct OnboardingView: View {
                 .foregroundStyle(.tint)
             Text("Cleaner Built needs Full Disk Access")
                 .font(.title2.bold())
-            Text("To measure app caches, logs and the Trash, macOS requires Full Disk Access. Cleaner Built only reads folders it is allowed to clean, never deletes anything permanently, and always shows you a preview first.")
+            Text("To measure app caches, logs and the Trash, macOS requires Full Disk Access. Cleaner Built only looks in folders it is allowed to clean, always shows you a preview first, and moves what you choose to the Trash so you can put it back.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 440)

@@ -25,6 +25,24 @@ final class AppModel {
     var selectedBytes: Int64 { selectedItems.reduce(0) { $0 + $1.bytes } }
     var reclaimableBytes: Int64 { result?.items.reduce(0) { $0 + $1.bytes } ?? 0 }
 
+    /// Categories with at least one cleanable item, in display order.
+    var foundCategories: [CleanupCategory] {
+        CleanupCategory.allCases.filter { c in c != .largeFiles && result?.items.contains { $0.category == c } == true }
+    }
+
+    func bytes(in category: CleanupCategory) -> Int64 {
+        result?.items.filter { $0.category == category }.reduce(0) { $0 + $1.bytes } ?? 0
+    }
+
+    /// Summary of the last scan; survives relaunch (the item list itself needs a fresh scan).
+    private(set) var lastScan = LastScan.load()
+
+    private func saveLastScan() {
+        guard let result else { return }
+        lastScan = LastScan(date: result.date, reclaimable: reclaimableBytes, items: result.items.count, trash: result.trashBytes)
+        lastScan?.save()
+    }
+
     func startScan() {
         guard !isBusy else { return }
         isScanning = true
@@ -108,6 +126,7 @@ final class AppModel {
     }
 
     private func finishCleaning() {
+        saveLastScan()
         isCleaning = false
         cleanTask = nil
         loadHistory()
@@ -121,6 +140,7 @@ final class AppModel {
     private func finish(_ result: ScanResult) {
         self.result = result
         selection = Set(result.items.map(\.id)) // dry run: everything starts selected, user deselects
+        saveLastScan()
         for item in result.items where appNames[item.name] == nil {
             if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: item.name) {
                 appNames[item.name] = app.deletingPathExtension().lastPathComponent
@@ -130,6 +150,21 @@ final class AppModel {
 
     private static func runningApps() -> Set<String> {
         Set(NSWorkspace.shared.runningApplications.flatMap { [$0.bundleIdentifier, $0.localizedName] }.compactMap { $0?.lowercased() })
+    }
+}
+
+struct LastScan: Codable {
+    let date: Date
+    let reclaimable: Int64
+    let items: Int
+    let trash: Int64
+
+    private static let key = "lastScan"
+    static func load() -> LastScan? {
+        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(LastScan.self, from: $0) }
+    }
+    func save() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(self), forKey: Self.key)
     }
 }
 

@@ -3,6 +3,8 @@ import SwiftUI
 struct ResultsView: View {
     @Environment(AppModel.self) private var model
     @State private var showConfirm = false
+    /// Show just one category (from the sidebar), or all when nil.
+    var only: CleanupCategory? = nil
 
     var body: some View {
         Group {
@@ -20,25 +22,24 @@ struct ResultsView: View {
                 }
             }
         }
-        .navigationTitle("Scan Results")
+        .navigationTitle(only?.title ?? "Scan Results")
     }
 
     private func list(_ result: ScanResult) -> some View {
         List {
-            ForEach(CleanupCategory.allCases.filter { $0 != .largeFiles }) { category in
+            ForEach(model.foundCategories.filter { only == nil || $0 == only }) { category in
                 let items = result.items.filter { $0.category == category }.sorted { $0.bytes > $1.bytes }
                 if !items.isEmpty {
                     Section {
-                        DisclosureGroup {
-                            ForEach(items) { row($0) }
-                        } label: {
-                            HStack {
-                                Toggle(isOn: isOn(items.map(\.id))) {
-                                    Label(category.title, systemImage: category.symbol).font(.headline)
-                                }
-                                Spacer()
-                                Text(items.reduce(0) { $0 + $1.bytes }.byteString).monospacedDigit()
+                        if only == nil {
+                            DisclosureGroup {
+                                ForEach(items) { row($0) }
+                            } label: {
+                                header(category, items)
                             }
+                        } else {
+                            header(category, items)
+                            ForEach(items) { row($0) }
                         }
                     } footer: {
                         Text(category.explanation).font(.caption).foregroundStyle(.secondary)
@@ -103,7 +104,17 @@ struct ResultsView: View {
         }
     }
 
-    // ponytail: a partly selected category shows as unchecked; use Toggle(sources:) if a mixed state is wanted.
+    private func header(_ category: CleanupCategory, _ items: [ScanItem]) -> some View {
+        HStack {
+            // Shows a dash when only some items are selected.
+            Toggle(sources: items.map { isOn([$0.id]) }, isOn: \.self) {
+                Label(category.title, systemImage: category.symbol).font(.headline)
+            }
+            Spacer()
+            Text(items.reduce(0) { $0 + $1.bytes }.byteString).monospacedDigit()
+        }
+    }
+
     private func isOn(_ ids: [String]) -> Binding<Bool> {
         Binding(
             get: { ids.allSatisfy(model.selection.contains) },

@@ -144,11 +144,13 @@ nonisolated struct Scanner {
         if let owner = rule.ownerBundleIDs.first(where: { options.runningApps.contains($0.lowercased()) }) { return .skip("\(owner) is running") }
         if pathGuard.validate(child) == nil { return .skip("Symlink, protected, or outside allowed folders") }
         if Self.isRunning(name, in: options.runningApps) { return .skip("App is running") }
-        let m = try measure(child, open: open, counter: &counter, errors: &errors)
+        let cutoff = options.now.addingTimeInterval(-Double(options.ageDays) * 86_400)
+        let m = try measure(child, open: open, stopAfter: rule.ageFiltered ? cutoff : nil, counter: &counter, errors: &errors)
+        // An early stop means something newer than the cutoff was found: always a skip, never an item.
+        if m.stoppedEarly { return .skip("Used in the last \(options.ageDays) days") }
         if m.unreadable { return .skip("Couldn't read everything inside") }
         if m.dataless { return .skip("Contains iCloud placeholders") }
         if m.inUse { return .skip("Open in another app") }
-        let cutoff = options.now.addingTimeInterval(-Double(options.ageDays) * 86_400)
         if rule.ageFiltered, m.newest > cutoff { return .skip("Used in the last \(options.ageDays) days") }
         return .ok(m)
     }
@@ -188,10 +190,12 @@ nonisolated struct Scanner {
         var dataless = false
         var inUse = false
         var unreadable = false
+        var stoppedEarly = false
     }
 
     /// Sums allocated size and finds the newest modification; never follows symlinks.
-    func measure(_ url: URL, open: Set<String>, counter: inout Counter, errors: inout [String]) throws -> Measure {
+    /// `stopAfter`: give up as soon as anything is newer than this date (the item will be skipped anyway).
+    func measure(_ url: URL, open: Set<String>, stopAfter: Date? = nil, counter: inout Counter, errors: inout [String]) throws -> Measure {
         var m = Measure()
         func add(_ u: URL) -> Bool {
             guard let v = try? u.resourceValues(forKeys: Self.keys), v.isSymbolicLink != true else { return false }
@@ -210,6 +214,10 @@ nonisolated struct Scanner {
         }
         while let u = e?.nextObject() as? URL {
             _ = add(u)
+            if let stopAfter, m.newest > stopAfter {
+                m.stoppedEarly = true
+                break
+            }
             counter.tick(u.path)
             if counter.count % 1000 == 0 { try Task.checkCancellation() }
         }

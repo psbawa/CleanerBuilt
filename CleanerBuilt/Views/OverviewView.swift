@@ -56,6 +56,19 @@ struct OverviewView: View {
                     } label: {
                         Label("Last Scan", systemImage: "checkmark.circle")
                     }
+                } else if let last = model.lastScan {
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 8) {
+                            LabeledContent("Scanned", value: last.date.formatted(date: .abbreviated, time: .shortened))
+                            LabeledContent("Reclaimable then", value: last.reclaimable.byteString)
+                            LabeledContent("Items found", value: last.items.formatted())
+                            Text("Scan again to see and clean the items.")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(8)
+                    } label: {
+                        Label("Last Scan", systemImage: "clock")
+                    }
                 }
             }
             .padding(24)
