@@ -30,10 +30,34 @@ struct ContentView: View {
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
-            // Placeholders until phase (b).
-            let item = selection ?? .overview
-            ContentUnavailableView(item.rawValue, systemImage: item.symbol, description: Text("Coming in the next phase."))
-                .navigationTitle(item.rawValue)
+            switch selection ?? .overview {
+            case .overview: OverviewView(showResults: { selection = .results })
+            case .results: ResultsView()
+            case .largeFiles: LargeFilesView()
+            case .history:
+                ContentUnavailableView("History", systemImage: "clock.arrow.circlepath", description: Text("Cleaning history arrives with the cleaning phase."))
+                    .navigationTitle("History")
+            case .settings: SettingsView()
+            }
         }
+    }
+}
+
+struct ScanProgressView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+            Text("Scanning… \(model.scannedFiles.formatted()) files")
+                .monospacedDigit()
+            Text(model.currentPath)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Button("Cancel", role: .cancel) { model.cancelScan() }
+        }
+        .frame(maxWidth: 460)
     }
 }
